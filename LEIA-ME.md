@@ -4,6 +4,28 @@ Protótipo de visão computacional para ajudar pessoas com deficiência visual.
 Esta primeira parte detecta **pessoas** pela câmera e avisa quando alguém se aproxima pela frente.
 A detecção de **buracos** entra depois, quando o modelo do Roboflow estiver treinado.
 
+## Endereço para testar no celular
+
+https://abraaolm-maker.github.io/guiavision/
+
+Abram no Chrome do Android ou no Safari do iPhone, toquem em **Iniciar câmera** e permitam o uso da câmera.
+
+**Para atualizar o site depois de mudar algum arquivo**, rodem na pasta `guiavision`:
+
+```bash
+git add -A
+```
+
+```bash
+git commit -m "descreva a mudança aqui"
+```
+
+```bash
+git push
+```
+
+O site leva um ou dois minutos para mostrar a versão nova.
+
 ## O que a página faz
 
 1. Abre a câmera (no celular, a traseira).
