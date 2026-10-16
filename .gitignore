@@ -1,0 +1,5 @@
+# Configuração local do Claude
+.claude/
+
+# Vídeo de teste: grande demais para o site, fica só no computador
+videos_teste/

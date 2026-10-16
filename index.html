@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#000000">
+  <title>GuiaVision</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topo">
+    <h1>GuiaVision</h1>
+    <p class="sub">Protótipo: detecta pessoas se aproximando pela câmera</p>
+  </header>
+
+  <main>
+    <!-- Tela inicial: o botão é obrigatório porque o celular só libera câmera, som e voz depois de um toque -->
+    <section id="tela-inicio" class="cartao">
+      <button id="btn-iniciar" class="botao-grande" type="button">Iniciar câmera</button>
+      <label class="botao-secundario" for="arquivo-video">
+        Testar com um vídeo do computador
+        <input id="arquivo-video" type="file" accept="video/*" hidden>
+      </label>
+      <p id="msg-carregando" class="msg" hidden>Carregando o modelo de IA. Pode levar alguns segundos na primeira vez.</p>
+    </section>
+
+    <!-- Área da câmera: o vídeo aparece embaixo e o canvas transparente desenha as caixas por cima -->
+    <section id="tela-camera" hidden>
+      <div class="palco">
+        <video id="video" playsinline muted autoplay></video>
+        <canvas id="canvas"></canvas>
+      </div>
+
+      <div id="status" class="status" role="status" aria-live="polite">Procurando…</div>
+
+      <div class="painel">
+        <div class="linha">
+          <span>Velocidade</span>
+          <strong id="fps">0 FPS</strong>
+        </div>
+        <div class="linha">
+          <label for="confianca">Confiança mínima</label>
+          <strong id="confianca-valor">50%</strong>
+        </div>
+        <input id="confianca" type="range" min="20" max="90" step="5" value="50">
+
+        <div class="chaves">
+          <label><input id="chk-voz" type="checkbox" checked> Voz</label>
+          <label><input id="chk-bip" type="checkbox" checked> Bip</label>
+          <label><input id="chk-vibrar" type="checkbox" checked> Vibrar</label>
+          <label><input id="chk-zona" type="checkbox" checked> Mostrar zona</label>
+        </div>
+
+        <button id="btn-parar" class="botao-secundario" type="button">Parar</button>
+      </div>
+    </section>
+
+    <p id="erro" class="erro" role="alert" hidden></p>
+  </main>
+
+  <!-- Bibliotecas de IA, com versão fixa -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
+
+  <!-- Código do projeto: cada arquivo cuida de uma parte -->
+  <script src="config.js"></script>
+  <script src="rastreador.js"></script>
+  <script src="avisos.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
