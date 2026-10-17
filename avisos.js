@@ -1,13 +1,47 @@
 // =============================================================
-// AVISOS: voz, bip e vibração
+// AVISOS: voz, bip e vibração (Fase 1)
 // No celular, som e voz só funcionam depois que o usuário toca na tela.
 // Por isso a função "liberar" é chamada no botão "Iniciar".
+//
+// Regra: o sistema mostra tudo na tela, mas fala pouco.
+// - Só avisa o que está no caminho e perto (ver rastreador.js)
+// - Fala no máximo um aviso por vez: o mais urgente
+// - A mesma palavra ("obstáculo", "buraco"...) não repete antes de alguns segundos
 // =============================================================
+
+// Diz quão urgente é uma trilha. 0 = não avisa.
+function prioridade(trilha) {
+  if (trilha.quadrosSemVer > 0) return 0;
+  const tipo = tipoDe(trilha.classe);
+  const s = trilha.situacao;
+  if (tipo === "movel") {
+    if (s === "muito perto") return CONFIG.prioridade["movel muito perto"];
+    if (s === "aproximando") return CONFIG.prioridade["movel aproximando"];
+    return 0;
+  }
+  if (tipo === "chao" && s === "perto") return CONFIG.prioridade[palavraDe(trilha.classe)] || 1;
+  if (tipo === "fixo" && s === "muito perto") return CONFIG.prioridade["obstáculo"];
+  return 0;
+}
+
+// Texto falado para uma trilha
+function textoDoAviso(trilha) {
+  const palavra = palavraDe(trilha.classe);
+  const Palavra = primeiraMaiuscula(palavra);
+  if (tipoDe(trilha.classe) === "movel") {
+    return trilha.situacao === "muito perto"
+      ? `Atenção, ${palavra} muito perto à frente`
+      : `${Palavra} se aproximando à frente`;
+  }
+  return `${Palavra} à frente`;
+}
 
 const Avisos = {
   audio: null,
   voz: null,
   ultimoAvisoGeral: 0,
+  ultimaPrioridade: 0,
+  ultimoPorPalavra: {},
   ligado: { voz: true, bip: true, vibrar: true },
 
   // Chamado no toque do botão Iniciar
@@ -20,8 +54,7 @@ const Avisos = {
 
     if ("speechSynthesis" in window) {
       // Fala vazia: "acorda" a voz no iPhone
-      const u = new SpeechSynthesisUtterance("");
-      speechSynthesis.speak(u);
+      speechSynthesis.speak(new SpeechSynthesisUtterance(""));
       this.escolherVoz();
       speechSynthesis.onvoiceschanged = () => this.escolherVoz();
     }
@@ -65,28 +98,42 @@ const Avisos = {
     if (this.ligado.vibrar && navigator.vibrate) navigator.vibrate(CONFIG.padraoVibracao);
   },
 
-  // Decide se uma trilha merece aviso agora e, se sim, avisa.
+  // Recebe todas as trilhas e avisa NO MÁXIMO UMA: a mais urgente.
   // Devolve o texto do aviso, ou null se não avisou.
-  talvezAvisar(trilha) {
-    if (trilha.situacao !== "aproximando" && trilha.situacao !== "muito perto") return null;
+  avisarMaisUrgente(trilhas) {
+    const candidatas = trilhas
+      .map(t => ({ t, p: prioridade(t) }))
+      .filter(x => x.p > 0)
+      .sort((a, b) => b.p - a.p);
+    for (const { t, p } of candidatas) {
+      const texto = this.talvezAvisar(t, p);
+      if (texto) return texto;
+    }
+    return null;
+  },
 
+  talvezAvisar(trilha, p) {
     const agora = performance.now();
-    const urgente = trilha.situacao === "muito perto";
-    // Se a situação piorou (de "aproximando" para "muito perto"), avisa na hora,
-    // sem esperar a pausa da mesma pessoa.
-    const piorou = urgente && trilha.ultimaSituacaoAvisada !== "muito perto";
-    if (!piorou && agora - trilha.ultimoAviso < CONFIG.intervaloMesmaPessoa) return null;
-    if (!piorou && agora - this.ultimoAvisoGeral < CONFIG.intervaloGeral) return null;
+    const palavra = palavraDe(trilha.classe);
+    const chave = palavra + "|" + trilha.situacao;
 
-    const nome = CONFIG.nomes[trilha.classe] || trilha.classe;
-    const texto = urgente
-      ? `Atenção, ${nome} muito perto à frente`
-      : `${primeiraMaiuscula(nome)} se aproximando à frente`;
+    // Se a situação piorou (ex.: de "aproximando" para "muito perto"), avisa na hora
+    const piorou = trilha.situacao === "muito perto" && trilha.ultimaSituacaoAvisada !== "muito perto"
+      && tipoDe(trilha.classe) === "movel";
+    // Um aviso mais urgente que o último pode passar na frente da pausa geral
+    const maisUrgente = p > this.ultimaPrioridade;
 
-    trilha.ultimoAviso = agora;
+    if (!piorou && agora - (this.ultimoPorPalavra[chave] || 0) < CONFIG.intervaloMesmaPalavra) return null;
+    if (!piorou && !maisUrgente && agora - this.ultimoAvisoGeral < CONFIG.intervaloGeral) return null;
+
     trilha.ultimaSituacaoAvisada = trilha.situacao;
+    this.ultimoPorPalavra[chave] = agora;
     this.ultimoAvisoGeral = agora;
-    this.bip(urgente);
+    this.ultimaPrioridade = p;
+    setTimeout(() => { if (performance.now() - this.ultimoAvisoGeral >= CONFIG.intervaloGeral) this.ultimaPrioridade = 0; }, CONFIG.intervaloGeral);
+
+    const texto = textoDoAviso(trilha);
+    this.bip(p >= CONFIG.prioridade["buraco"]);
     this.vibrar();
     this.falar(texto);
     return texto;
@@ -94,5 +141,5 @@ const Avisos = {
 };
 
 function primeiraMaiuscula(s) {
-  return s.charAt(0).toUpperCase() + s.slice(1);
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
 }

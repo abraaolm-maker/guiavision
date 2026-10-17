@@ -10,7 +10,7 @@
 <body>
   <header class="topo">
     <h1>GuiaVision</h1>
-    <p class="sub">Protótipo: detecta pessoas se aproximando pela câmera</p>
+    <p class="sub">Protótipo: detecta buracos, desníveis, obstáculos e pessoas pela câmera</p>
   </header>
 
   <main>
@@ -21,7 +21,7 @@
         Testar com um vídeo do computador
         <input id="arquivo-video" type="file" accept="video/*" hidden>
       </label>
-      <p id="msg-carregando" class="msg" hidden>Carregando o modelo de IA. Pode levar alguns segundos na primeira vez.</p>
+      <p id="msg-carregando" class="msg" hidden>Carregando os modelos de IA. Na primeira vez, pode levar até um minuto.</p>
     </section>
 
     <!-- Área da câmera: o vídeo aparece embaixo e o canvas transparente desenha as caixas por cima -->
@@ -38,8 +38,9 @@
           <span>Velocidade</span>
           <strong id="fps">0 FPS</strong>
         </div>
+        <p id="modelo-turma" class="msg-modelo"></p>
         <div class="linha">
-          <label for="confianca">Confiança mínima</label>
+          <label for="confianca">Confiança (pessoas e veículos)</label>
           <strong id="confianca-valor">50%</strong>
         </div>
         <input id="confianca" type="range" min="20" max="90" step="5" value="50">

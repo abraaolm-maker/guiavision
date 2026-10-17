@@ -19,6 +19,17 @@ function sobreposicao(a, b) {
   return uniao > 0 ? intersecao / uniao : 0;
 }
 
+// Dados de uma classe, lidos da tabela em config.js
+function nomeDe(classe) {
+  return (CONFIG.classes[classe] && CONFIG.classes[classe].nome) || classe;
+}
+function palavraDe(classe) {
+  return (CONFIG.classes[classe] && CONFIG.classes[classe].palavra) || "";
+}
+function tipoDe(classe) {
+  return (CONFIG.classes[classe] && CONFIG.classes[classe].tipo) || "silencio";
+}
+
 // Diz de que lado da imagem a caixa está.
 function ladoDaCaixa(caixa) {
   const centro = caixa.x + caixa.w / 2;
@@ -34,9 +45,9 @@ function estaNoCaminho(caixa) {
 }
 
 class Rastreador {
-  constructor() {
-    this.trilhas = [];   // cada trilha é uma pessoa sendo seguida
-    this.proximoId = 1;
+  constructor(primeiroId = 1) {
+    this.trilhas = [];   // cada trilha é um objeto sendo seguido
+    this.proximoId = primeiroId;
   }
 
   // Recebe as detecções de um quadro e atualiza as trilhas.
@@ -91,12 +102,27 @@ class Rastreador {
     return this.trilhas;
   }
 
-  // Decide a situação de uma trilha:
-  // "nova" (ainda não confirmada), "longe", "afastando", "parada", "aproximando" ou "muito perto".
-  // "parada" quer dizer que a distância quase não muda.
+  // Decide a situação de uma trilha. Depende do tipo do objeto (config.js):
+  //   movel:    "longe", "afastando", "parada", "aproximando" ou "muito perto"
+  //   chao:     "à vista" ou "perto"
+  //   fixo:     "à vista" ou "muito perto"
+  //   silencio: "à vista"
+  // "nova" quer dizer que o objeto ainda não foi confirmado em várias análises.
   avaliar(t) {
     if (t.vezesVista < CONFIG.quadrosParaConfirmar || t.quadrosSemVer > 0) return "nova";
 
+    const tipo = tipoDe(t.classe);
+    const base = t.caixa.y + t.caixa.h; // onde a caixa termina: perto de 1 = perto do pé
+    const noCaminho = estaNoCaminho(t.caixa);
+
+    if (tipo === "silencio") return "à vista";
+    if (tipo === "chao") return base >= CONFIG.chaoPerto && noCaminho ? "perto" : "à vista";
+    if (tipo === "fixo") {
+      const muitoPerto = base >= CONFIG.fixoMuitoPertoBase || t.caixa.h >= CONFIG.fixoMuitoPertoAltura;
+      return muitoPerto && noCaminho ? "muito perto" : "à vista";
+    }
+
+    // Objetos que se movem (pessoa e veículo)
     const area = t.caixa.w * t.caixa.h;
     if (area < CONFIG.areaMinima) return "longe";
     if (area >= CONFIG.areaMuitoPerto && estaNoCaminho(t.caixa)) return "muito perto";

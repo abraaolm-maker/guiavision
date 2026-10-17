@@ -1,6 +1,9 @@
 // =============================================================
 // APP PRINCIPAL
-// Liga tudo: câmera -> modelo de IA -> rastreador -> desenho -> avisos.
+// Liga tudo: câmera -> modelos de IA -> rastreadores -> desenho -> avisos.
+// Dois modelos se revezam, um quadro cada, para não pesar no celular:
+//   COCO-SSD (pronto): pessoas e veículos
+//   Modelo da turma (Roboflow): buracos, escadas, rampas e obstáculos
 // =============================================================
 
 const el = {
@@ -14,6 +17,7 @@ const el = {
   canvas: document.getElementById("canvas"),
   status: document.getElementById("status"),
   fps: document.getElementById("fps"),
+  modeloTurma: document.getElementById("modelo-turma"),
   confianca: document.getElementById("confianca"),
   confiancaValor: document.getElementById("confianca-valor"),
   chkVoz: document.getElementById("chk-voz"),
@@ -24,29 +28,32 @@ const el = {
 };
 const ctx = el.canvas.getContext("2d");
 
-let modeloPessoas = null;
-let rastreador = new Rastreador();
+let modeloPessoas = null;    // COCO-SSD
+let motorTurma = null;       // inferencejs (modelo da turma)
+let workerTurma = null;
+let rastreadores = novosRastreadores();
 let rodando = false;
 let fluxoCamera = null;
 let fpsSuave = 0;
 let ultimoQuadro = 0;
-
-// -------------------------------------------------------------
-// LUGAR RESERVADO PARA O MODELO DE BURACOS
-// Quando o modelo do Roboflow estiver treinado, ele entra aqui.
-// Cada detector é uma função que recebe o vídeo e devolve uma lista
-// no formato: { classe, confianca, caixa: {x, y, w, h} } com valores de 0 a 1.
-// Os detectores se revezam: um quadro para pessoas, outro para buracos.
-// -------------------------------------------------------------
-const detectoresExtras = [
-  // exemplo futuro: detectarBuracos,
-];
 let vezDoDetector = 0;
 
-// ---------- Mensagens de erro em português ----------
+// Cada modelo tem seu próprio rastreador. Assim, um objeto do modelo da turma
+// não é "esquecido" no quadro em que só o COCO-SSD rodou.
+function novosRastreadores() {
+  return { coco: new Rastreador(1), roboflow: new Rastreador(1000) };
+}
+function todasTrilhas() {
+  return [...rastreadores.coco.trilhas, ...rastreadores.roboflow.trilhas];
+}
+
+// ---------- Mensagens ----------
 function mostrarErro(texto) {
   el.erro.textContent = texto;
   el.erro.hidden = false;
+}
+function situacaoModeloTurma(texto) {
+  if (el.modeloTurma) el.modeloTurma.textContent = texto;
 }
 
 function explicarErroCamera(e) {
@@ -59,12 +66,50 @@ function explicarErroCamera(e) {
   return "Não foi possível abrir a câmera: " + (e && e.message ? e.message : e);
 }
 
-// ---------- Carregar o modelo de IA ----------
-async function carregarModelo() {
+// ---------- Carregar os modelos ----------
+async function carregarModeloPessoas() {
   if (modeloPessoas) return;
-  el.carregando.hidden = false;
   await tf.ready();
   modeloPessoas = await cocoSsd.load({ base: CONFIG.modeloBase });
+}
+
+function carregarScript(url) {
+  return new Promise((ok, falha) => {
+    const s = document.createElement("script");
+    s.src = url;
+    s.onload = ok;
+    s.onerror = () => falha(new Error("não foi possível baixar " + url));
+    document.head.appendChild(s);
+  });
+}
+
+// O modelo da turma é opcional: se falhar, a página continua com pessoas e veículos.
+async function carregarModeloTurma() {
+  if (workerTurma) return;
+  if (!CONFIG.roboflow.chavePublica) {
+    situacaoModeloTurma("Modelo de obstáculos desligado: falta a chave pública em config.js");
+    return;
+  }
+  try {
+    situacaoModeloTurma("Carregando o modelo de obstáculos…");
+    if (!window.inferencejs) await carregarScript("https://cdn.jsdelivr.net/npm/inferencejs@1.3.0/dist/inference.js");
+    motorTurma = new inferencejs.InferenceEngine();
+    workerTurma = await motorTurma.startWorkerByModelId(
+      CONFIG.roboflow.modeloId,
+      CONFIG.roboflow.chavePublica,
+      [{ scoreThreshold: CONFIG.roboflow.confianca, iouThreshold: 0.5, maxNumBoxes: 20 }],
+    );
+    situacaoModeloTurma("Modelo de obstáculos carregado");
+  } catch (e) {
+    console.error(e);
+    workerTurma = null;
+    situacaoModeloTurma("Não foi possível carregar o modelo de obstáculos: " + (e && e.message ? e.message : e));
+  }
+}
+
+async function carregarModelos() {
+  el.carregando.hidden = false;
+  await Promise.all([carregarModeloPessoas(), carregarModeloTurma()]);
   el.carregando.hidden = true;
 }
 
@@ -97,7 +142,7 @@ async function iniciar(origemVideo) {
   el.btnIniciar.disabled = true;
   Avisos.liberar(); // precisa acontecer logo no toque do botão
   try {
-    await carregarModelo();
+    await carregarModelos();
     // A área do vídeo precisa estar visível antes do play, senão o navegador pausa o vídeo
     el.inicio.hidden = true;
     el.camera.hidden = false;
@@ -111,7 +156,7 @@ async function iniciar(origemVideo) {
     mostrarErro(origemVideo ? "Não foi possível abrir o vídeo: " + e.message : explicarErroCamera(e));
     return;
   }
-  rastreador = new Rastreador();
+  rastreadores = novosRastreadores();
   rodando = true;
   ultimoQuadro = performance.now();
   requestAnimationFrame(laco);
@@ -128,23 +173,49 @@ function parar() {
   el.btnIniciar.disabled = false;
 }
 
-// ---------- Detecção de pessoas com o COCO-SSD ----------
-async function detectarPessoas(video) {
-  const brutas = await modeloPessoas.detect(video, 20, CONFIG.confiancaMinima);
-  const largura = video.videoWidth;
-  const altura = video.videoHeight;
+// ---------- Detectores ----------
+// Os dois devolvem uma lista no mesmo formato:
+// { classe, confianca, caixa: {x, y, w, h} } com valores de 0 a 1.
+function tamanhoDe(fonte) {
+  return { W: fonte.videoWidth || fonte.naturalWidth || fonte.width, H: fonte.videoHeight || fonte.naturalHeight || fonte.height };
+}
+
+async function detectarPessoas(fonte) {
+  const brutas = await modeloPessoas.detect(fonte, 20, CONFIG.confiancaMinima);
+  const { W, H } = tamanhoDe(fonte);
   return brutas
-    .filter(d => CONFIG.classesAcompanhadas.includes(d.class))
+    .filter(d => CONFIG.classes[d.class] && CONFIG.classes[d.class].fonte === "coco")
     .map(d => ({
       classe: d.class,
       confianca: d.score,
+      caixa: { x: d.bbox[0] / W, y: d.bbox[1] / H, w: d.bbox[2] / W, h: d.bbox[3] / H },
+    }));
+}
+
+// O modelo da turma devolve a caixa pelo CENTRO (x, y), largura e altura, em pixels
+async function detectarObstaculos(fonte) {
+  const { W, H } = tamanhoDe(fonte);
+  const previsoes = await motorTurma.infer(workerTurma, new inferencejs.CVImage(fonte));
+  return previsoes
+    .filter(p => CONFIG.classes[p.class] && p.confidence >= CONFIG.roboflow.confianca)
+    .map(p => ({
+      classe: p.class,
+      confianca: p.confidence,
       caixa: {
-        x: d.bbox[0] / largura,
-        y: d.bbox[1] / altura,
-        w: d.bbox[2] / largura,
-        h: d.bbox[3] / altura,
+        x: (p.bbox.x - p.bbox.width / 2) / W,
+        y: (p.bbox.y - p.bbox.height / 2) / H,
+        w: p.bbox.width / W,
+        h: p.bbox.height / H,
       },
     }));
+}
+
+// Roda um dos detectores (revezando) e atualiza o rastreador dele
+async function analisar(fonte) {
+  const usarTurma = workerTurma && vezDoDetector % 2 === 1;
+  vezDoDetector += 1;
+  if (usarTurma) rastreadores.roboflow.atualizar(await detectarObstaculos(fonte));
+  else rastreadores.coco.atualizar(await detectarPessoas(fonte));
 }
 
 // ---------- Laço principal: roda uma vez por quadro ----------
@@ -153,29 +224,16 @@ async function laco() {
 
   const video = el.video;
   if (video.readyState >= 2 && video.videoWidth > 0) {
-    // Ajusta o canvas ao tamanho do vídeo
     if (el.canvas.width !== video.videoWidth) {
       el.canvas.width = video.videoWidth;
       el.canvas.height = video.videoHeight;
     }
-
     try {
-      // Reveza os detectores. Sem modelo de buracos, só pessoas rodam.
-      const todos = [detectarPessoas, ...detectoresExtras];
-      const detector = todos[vezDoDetector % todos.length];
-      vezDoDetector += 1;
-
-      if (detector === detectarPessoas) {
-        const deteccoes = await detectarPessoas(video);
-        rastreador.atualizar(deteccoes);
-      } else {
-        await detector(video); // os buracos terão o próprio tratamento depois
-      }
+      await analisar(video);
     } catch (e) {
       console.error(e);
     }
-
-    desenhar(video);
+    desenhar();
     atualizarStatus();
     medirFps();
   }
@@ -184,7 +242,18 @@ async function laco() {
 }
 
 // ---------- Desenho ----------
-function desenhar(video) {
+const CORES = {
+  "nova": "#9e9e9e",
+  "longe": "#9e9e9e",
+  "à vista": "#34c759",
+  "afastando": "#5ac8fa",
+  "parada": "#34c759",
+  "perto": "#ff9500",
+  "aproximando": "#ff9500",
+  "muito perto": "#ff3b30",
+};
+
+function desenhar() {
   const W = el.canvas.width;
   const H = el.canvas.height;
   ctx.clearRect(0, 0, W, H); // apaga as caixas do quadro anterior; o vídeo aparece por baixo
@@ -204,24 +273,20 @@ function desenhar(video) {
   const fonte = Math.max(16, Math.round(W / 32));
   ctx.font = `bold ${fonte}px system-ui, sans-serif`;
 
-  for (const t of rastreador.trilhas) {
+  for (const t of todasTrilhas()) {
     if (t.quadrosSemVer > 0) continue;
-    const cor = {
-      "nova": "#9e9e9e",
-      "longe": "#9e9e9e",
-      "afastando": "#5ac8fa",
-      "parada": "#34c759",
-      "aproximando": "#ff9500",
-      "muito perto": "#ff3b30",
-    }[t.situacao] || "#34c759";
+    const cor = CORES[t.situacao] || "#34c759";
+    // Objetos silenciosos aparecem com caixa tracejada: o sistema viu, mas não avisa.
+    const silencioso = tipoDe(t.classe) === "silencio";
 
     const x = t.caixa.x * W, y = t.caixa.y * H, w = t.caixa.w * W, h = t.caixa.h * H;
     ctx.strokeStyle = cor;
     ctx.lineWidth = espessura;
+    if (silencioso) ctx.setLineDash([12, 8]);
     ctx.strokeRect(x, y, w, h);
+    ctx.setLineDash([]);
 
-    const nome = CONFIG.nomes[t.classe] || t.classe;
-    const texto = `${nome} #${t.id} ${Math.round(t.confianca * 100)}% ${t.situacao}`;
+    const texto = `${nomeDe(t.classe)} ${Math.round(t.confianca * 100)}% ${t.situacao}`;
     const larguraTexto = ctx.measureText(texto).width + 12;
     const yTexto = y > fonte + 8 ? y - fonte - 8 : y;
     ctx.fillStyle = cor;
@@ -236,12 +301,13 @@ let textoAviso = "";
 let avisoAte = 0;
 
 function atualizarStatus() {
-  for (const t of rastreador.trilhas) {
-    const aviso = Avisos.talvezAvisar(t);
-    if (aviso) {
-      textoAviso = aviso;
-      avisoAte = performance.now() + 2500;
-    }
+  const trilhas = todasTrilhas();
+
+  // No máximo um aviso por vez: o mais urgente
+  const aviso = Avisos.avisarMaisUrgente(trilhas);
+  if (aviso) {
+    textoAviso = aviso;
+    avisoAte = performance.now() + 2500;
   }
 
   if (performance.now() < avisoAte) {
@@ -250,18 +316,20 @@ function atualizarStatus() {
     return;
   }
 
-  const confirmadas = rastreador.trilhas.filter(t => t.situacao !== "nova" && t.quadrosSemVer === 0);
+  const confirmadas = trilhas.filter(t => t.situacao !== "nova" && t.quadrosSemVer === 0);
   if (confirmadas.length === 0) {
     el.status.textContent = "Caminho livre";
     el.status.className = "status";
   } else {
-    const n = confirmadas.length;
-    el.status.textContent = n === 1 ? "1 pessoa à vista" : `${n} pessoas à vista`;
+    // Conta quantos de cada tipo, por exemplo: "2 × pessoa, 1 × cone"
+    const contagem = {};
+    for (const t of confirmadas) contagem[nomeDe(t.classe)] = (contagem[nomeDe(t.classe)] || 0) + 1;
+    el.status.textContent = Object.entries(contagem).map(([nome, n]) => `${n} × ${nome}`).join(", ") + " à vista";
     el.status.className = "status atencao";
   }
 }
 
-// ---------- FPS: quantos quadros por segundo o sistema analisa ----------
+// ---------- FPS: quantas análises por segundo o sistema faz ----------
 function medirFps() {
   const agora = performance.now();
   const instantaneo = 1000 / Math.max(1, agora - ultimoQuadro);
@@ -303,3 +371,4 @@ el.arquivo.addEventListener("change", () => {
 });
 
 if (videoDeTeste) el.btnIniciar.textContent = "Iniciar com vídeo de teste";
+if (!CONFIG.roboflow.chavePublica) situacaoModeloTurma("Modelo de obstáculos desligado: falta a chave pública em config.js");

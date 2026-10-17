@@ -71,6 +71,7 @@ main {
 .botao-grande:disabled { opacity: 0.5; cursor: wait; }
 
 .msg { margin: 0; color: var(--destaque); }
+.msg-modelo { margin: 0; font-size: 0.9rem; opacity: 0.85; }
 
 .palco {
   position: relative;
