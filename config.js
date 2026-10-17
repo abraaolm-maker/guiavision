@@ -16,7 +16,7 @@ const CONFIG = {
     // COLE AQUI a "Publishable API Key" do Roboflow, entre as aspas.
     // Onde achar: Roboflow > Settings > API Keys > Publishable API Key.
     // Essa chave foi feita para ficar visível em sites. NUNCA coloque aqui a "Private API Key".
-    chavePublica: "",
+    chavePublica: "rf_4F9djfIFNKZMOMwW76YwxZxKCY52",
     // Confiança mínima. 0.28 é o valor ideal indicado pela avaliação do modelo.
     confianca: 0.28,
   },
